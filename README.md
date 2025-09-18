@@ -1,3 +1,5 @@
+# Github Hack Night Project - 3rd Place
+
 # Strava Activity Creator Agent
 
 An intelligent agent that uses Writer AI to create and update Strava activities with AI-generated descriptions.
