@@ -37,26 +37,8 @@ except Exception as e:
     agent = None
 
 # Pydantic models for API requests
-class QuickActivityRequest(BaseModel):
-    sport_type: str
-    duration_minutes: int
-    distance_km: Optional[float] = None
-    name: Optional[str] = None
-    description_style: str = "motivational"
-
 class PromptActivityRequest(BaseModel):
     prompt: str
-
-class ActivityRequest(BaseModel):
-    name: str
-    sport_type: str
-    elapsed_time: int  # in seconds
-    distance: Optional[float] = None  # in meters
-    start_date_local: Optional[str] = None
-    description: Optional[str] = None
-    generate_description: bool = True
-    generate_name: bool = False
-    description_style: str = "motivational"
 
 class ActivityUpdateRequest(BaseModel):
     updates: Optional[Dict[str, Any]] = None
@@ -295,69 +277,10 @@ async def home():
                             placeholder="e.g., 'Just did a GOATED AF workout at Github hack night. 10 one legged squats on both legs and 10 body weight squats.'"
                             style="resize: vertical; min-height: 100px; font-family: inherit; line-height: 1.4;"
                         ></textarea>
-                        <small style="color: #888; font-style: italic; display: block; margin-top: 8px;">
-                            ✨ <strong>The more details, the funnier the joke title!</strong> Include duration, location, feelings, weather, companions, achievements, or challenges.
-                        </small>
                     </div>
                     <button type="submit" class="submit-btn" style="background: linear-gradient(45deg, #28a745, #20c997);">
                         Create Activity
                     </button>
-                </form>
-            </div>
-            
-            <div class="section {'' if is_authenticated else 'hidden'}">
-                <h2>⚡ Advanced Activity Creator</h2>
-                <p style="color: #666; margin-bottom: 20px;">
-                    Prefer detailed control? Use this form to specify exact parameters.
-                </p>
-                <form action="/activity/quick" method="post">
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label for="sport_type">🏃‍♂️ Activity Type:</label>
-                            <select name="sport_type" required>
-                                <option value="Run">🏃‍♂️ Run</option>
-                                <option value="Ride">🚴‍♂️ Bike Ride</option>
-                                <option value="Swim">🏊‍♂️ Swim</option>
-                                <option value="Hike">🥾 Hike</option>
-                                <option value="Walk">🚶‍♂️ Walk</option>
-                                <option value="WeightTraining">🏋️‍♂️ Weight Training</option>
-                                <option value="Yoga">🧘‍♀️ Yoga</option>
-                                <option value="CrossCountrySkiing">⛷️ Cross Country Skiing</option>
-                                <option value="Rowing">🚣‍♂️ Rowing</option>
-                                <option value="Elliptical">🔄 Elliptical</option>
-                            </select>
-                        </div>
-                        
-                        <div class="form-group">
-                            <label for="duration_minutes">⏱️ Duration (minutes):</label>
-                            <input type="number" name="duration_minutes" required min="1" max="600" placeholder="e.g., 30">
-                        </div>
-                        
-                        <div class="form-group">
-                            <label for="distance_km">📏 Distance (km) - Optional:</label>
-                            <input type="number" name="distance_km" step="0.1" min="0" placeholder="e.g., 5.2">
-                        </div>
-                        
-                        <div class="form-group">
-                            <label for="description_style">🎨 AI Description Style:</label>
-                            <select name="description_style">
-                                <option value="motivational">💪 Motivational</option>
-                                <option value="casual">😊 Casual</option>
-                                <option value="technical">📊 Technical</option>
-                                <option value="humorous">😄 Humorous</option>
-                            </select>
-                        </div>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="name">✏️ Activity Name (leave blank for automatic joke title!):</label>
-                        <input type="text" name="name" placeholder="e.g., Morning Run (or leave empty for a hilarious AI-generated joke title!)">
-                        <small style="color: #888; font-style: italic; display: block; margin-top: 5px;">
-                            💡 <strong>Pro tip:</strong> Leave this blank to get a funny, auto-generated joke title! 😂
-                        </small>
-                    </div>
-                    
-                    <button type="submit" class="submit-btn">Create Activity with Joke Title! 😂🤖</button>
                 </form>
             </div>
             
@@ -461,118 +384,6 @@ async def strava_callback(code: str, scope: str, request: Request):
     except Exception as e:
         logger.error(f"Authentication failed: {e}")
         raise HTTPException(status_code=400, detail=f"Authentication failed: {e}")
-
-@app.post("/activity/quick")
-async def create_quick_activity(
-    sport_type: str = Form(...),
-    duration_minutes: int = Form(...),
-    distance_km: str = Form(""),  # Changed to str to handle empty values
-    name: str = Form(""),         # Changed to str to handle empty values
-    description_style: str = Form("motivational")
-):
-    """Create a quick activity with minimal input (form submission)."""
-    if not agent:
-        raise HTTPException(status_code=500, detail="Agent not initialized")
-    
-    # For simplicity, we'll use the first session found
-    # In production, implement proper session management
-    if not user_sessions:
-        return HTMLResponse(content="""
-        <html>
-        <body style="font-family: Arial, sans-serif; margin: 40px; text-align: center;">
-            <h2>⚠️ Authentication Required</h2>
-            <p>Please authenticate with Strava first.</p>
-            <button onclick="window.location.href='/auth/strava'" style="background-color: #fc4c02; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer;">
-                Connect with Strava
-            </button>
-        </body>
-        </html>
-        """)
-    
-    # Use the first available session
-    session_data = list(user_sessions.values())[0]
-    agent.set_strava_tokens(
-        session_data['access_token'],
-        session_data['refresh_token'],
-        session_data['expires_at']
-    )
-    
-    try:
-        # Convert empty string to None for name
-        if name == "":
-            name = None
-        
-        # Convert empty string to None for distance, otherwise convert to float
-        if distance_km == "":
-            distance_km = None
-        else:
-            try:
-                distance_km = float(distance_km)
-            except ValueError:
-                distance_km = None
-        
-        activity = agent.create_quick_activity(
-            sport_type=sport_type,
-            duration_minutes=duration_minutes,
-            distance_km=distance_km,
-            name=name,
-            description_style=description_style
-        )
-        
-        # Return success page
-        html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Activity Created!</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }}
-                .container {{ max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-                h1 {{ color: #fc4c02; text-align: center; }}
-                .success {{ background-color: #d4edda; color: #155724; padding: 15px; border-radius: 5px; margin: 20px 0; }}
-                .activity-info {{ background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0; }}
-                button {{ background-color: #fc4c02; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; margin: 10px; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>🎉 Activity Created Successfully!</h1>
-                <div class="success">
-                    Your activity has been created on Strava with AI-generated content!
-                </div>
-                <div class="activity-info">
-                    <h3>📊 Activity Details:</h3>
-                    <p><strong>Name:</strong> {activity.get('name', 'N/A')}</p>
-                    <p><strong>Type:</strong> {activity.get('sport_type', 'N/A')}</p>
-                    <p><strong>Distance:</strong> {activity.get('distance', 0) / 1000:.2f} km</p>
-                    <p><strong>Duration:</strong> {activity.get('elapsed_time', 0) // 60} minutes</p>
-                    <p><strong>Description:</strong> {activity.get('description', 'N/A')}</p>
-                </div>
-                <div style="text-align: center;">
-                    <button onclick="window.location.href='/'">Create Another Activity</button>
-                    <button onclick="window.open('https://www.strava.com/activities/{activity.get('id')}', '_blank')">
-                        View on Strava
-                    </button>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-        return HTMLResponse(content=html_content)
-        
-    except Exception as e:
-        logger.error(f"Failed to create activity: {e}")
-        return HTMLResponse(content=f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; margin: 40px; text-align: center;">
-            <h2>❌ Error Creating Activity</h2>
-            <p>Failed to create activity: {str(e)}</p>
-            <button onclick="window.location.href='/'" style="background-color: #fc4c02; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer;">
-                Go Back
-            </button>
-        </body>
-        </html>
-        """)
 
 @app.post("/activity/prompt")
 async def create_activity_from_prompt(
@@ -716,37 +527,6 @@ async def create_activity_from_prompt(
         </html>
         """)
 
-@app.post("/api/activity/quick")
-async def api_create_quick_activity(request: QuickActivityRequest):
-    """Create a quick activity via JSON API."""
-    if not agent:
-        raise HTTPException(status_code=500, detail="Agent not initialized")
-    
-    # Check for authentication
-    if not user_sessions:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    
-    # Use the first available session
-    session_data = list(user_sessions.values())[0]
-    agent.set_strava_tokens(
-        session_data['access_token'],
-        session_data['refresh_token'],
-        session_data['expires_at']
-    )
-    
-    try:
-        activity = agent.create_quick_activity(
-            sport_type=request.sport_type,
-            duration_minutes=request.duration_minutes,
-            distance_km=request.distance_km,
-            name=request.name,
-            description_style=request.description_style
-        )
-        return {"success": True, "activity": activity}
-    except Exception as e:
-        logger.error(f"Failed to create activity: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-
 @app.post("/api/activity/prompt")
 async def api_create_activity_from_prompt(request: PromptActivityRequest):
     """Create an activity from a natural language prompt via JSON API."""
@@ -780,42 +560,6 @@ async def api_create_activity_from_prompt(request: PromptActivityRequest):
         raise
     except Exception as e:
         logger.error(f"Failed to create activity from prompt: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.post("/api/activity/create")
-async def api_create_activity(request: ActivityRequest):
-    """Create an activity with full control via JSON API."""
-    if not agent:
-        raise HTTPException(status_code=500, detail="Agent not initialized")
-    
-    # Check for authentication
-    if not user_sessions:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    
-    # Use the first available session
-    session_data = list(user_sessions.values())[0]
-    agent.set_strava_tokens(
-        session_data['access_token'],
-        session_data['refresh_token'],
-        session_data['expires_at']
-    )
-    
-    try:
-        activity_data = request.dict(exclude_unset=True)
-        # Remove our custom fields
-        generate_description = activity_data.pop('generate_description', True)
-        generate_name = activity_data.pop('generate_name', False)
-        description_style = activity_data.pop('description_style', 'motivational')
-        
-        activity = agent.create_activity_with_ai(
-            activity_data=activity_data,
-            generate_description=generate_description,
-            generate_name=generate_name,
-            description_style=description_style
-        )
-        return {"success": True, "activity": activity}
-    except Exception as e:
-        logger.error(f"Failed to create activity: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.put("/api/activity/{activity_id}")

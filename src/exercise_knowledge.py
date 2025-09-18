@@ -25,7 +25,7 @@ class ExerciseKnowledgeBase:
             weaviate_url: Weaviate instance URL (defaults to local)
             api_key: Weaviate API key for cloud instances
         """
-        self.weaviate_url = weaviate_url or os.getenv('WEAVIATE_URL', 'http://localhost:8080')
+        self.weaviate_url = weaviate_url or os.getenv('WEAVIATE_URL', 'http://localhost:8081')
         self.api_key = api_key or os.getenv('WEAVIATE_API_KEY')
         
         try:
@@ -36,7 +36,23 @@ class ExerciseKnowledgeBase:
                     auth_credentials=Auth.api_key(self.api_key)
                 )
             else:
-                self.client = weaviate.connect_to_local(host=self.weaviate_url.replace('http://', '').replace('https://', ''))
+                # Parse the URL to extract just the host and port
+                if self.weaviate_url.startswith('http://'):
+                    host_part = self.weaviate_url.replace('http://', '')
+                elif self.weaviate_url.startswith('https://'):
+                    host_part = self.weaviate_url.replace('https://', '')
+                else:
+                    host_part = self.weaviate_url
+                
+                # Split host and port if present
+                if ':' in host_part:
+                    host, port = host_part.split(':')
+                    port = int(port)
+                else:
+                    host = host_part
+                    port = 8080
+                
+                self.client = weaviate.connect_to_local(host=host, port=port)
             
             logger.info("Connected to Weaviate successfully")
             

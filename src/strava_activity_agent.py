@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 
 from .writer_client import WriterAPIClient
 from .strava_client import StravaAPIClient
+from .exercise_knowledge import ExerciseKnowledgeBase
 
 # Load environment variables
 load_dotenv()
@@ -31,7 +32,9 @@ class StravaActivityAgent:
         writer_model: str = "palmyra-x5",
         strava_client_id: Optional[str] = None,
         strava_client_secret: Optional[str] = None,
-        strava_redirect_uri: Optional[str] = None
+        strava_redirect_uri: Optional[str] = None,
+        weaviate_url: Optional[str] = None,
+        weaviate_api_key: Optional[str] = None
     ):
         """
         Initialize the Strava Activity Agent.
@@ -42,6 +45,8 @@ class StravaActivityAgent:
             strava_client_id: Strava client ID (defaults to STRAVA_CLIENT_ID env var)
             strava_client_secret: Strava client secret (defaults to STRAVA_CLIENT_SECRET env var)
             strava_redirect_uri: OAuth redirect URI (defaults to STRAVA_REDIRECT_URI env var)
+            weaviate_url: Weaviate instance URL (defaults to WEAVIATE_URL env var)
+            weaviate_api_key: Weaviate API key (defaults to WEAVIATE_API_KEY env var)
         """
         # Initialize Writer client
         self.writer_api_key = writer_api_key or os.getenv('WRITER_API_KEY')
@@ -67,7 +72,46 @@ class StravaActivityAgent:
             redirect_uri=self.strava_redirect_uri
         )
         
-        logger.info("Strava Activity Agent initialized successfully")
+        # Initialize Exercise Knowledge Base
+        self.exercise_kb = ExerciseKnowledgeBase(
+            weaviate_url=weaviate_url,
+            api_key=weaviate_api_key
+        )
+        
+        logger.info("Strava Activity Agent initialized successfully with exercise knowledge base")
+    
+    def search_exercise_terms(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Search for exercise terms and related concepts using the knowledge base.
+        
+        Args:
+            query: Search query for exercise terms
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of exercise matches with related terms and concepts
+        """
+        try:
+            return self.exercise_kb.search_exercises(query, limit)
+        except Exception as e:
+            logger.error(f"Failed to search exercise terms: {e}")
+            return []
+    
+    def get_exercise_suggestions_for_sport(self, sport_type: str) -> List[Dict[str, Any]]:
+        """
+        Get exercise suggestions and terminology for a specific sport type.
+        
+        Args:
+            sport_type: Strava sport type
+            
+        Returns:
+            List of related exercises and terminology
+        """
+        try:
+            return self.exercise_kb.get_exercise_suggestions(sport_type)
+        except Exception as e:
+            logger.error(f"Failed to get exercise suggestions: {e}")
+            return []
     
     def get_strava_auth_url(self, scopes: Optional[List[str]] = None) -> str:
         """
@@ -325,21 +369,38 @@ class StravaActivityAgent:
             raise
 
     async def parse_activity_prompt(self, prompt: str) -> Dict[str, Any]:
-        """Parse a natural language prompt to extract activity details using AI."""
+        """Parse a natural language prompt to extract activity details using AI with exercise knowledge enhancement."""
         try:
-            system_prompt = """You are an expert fitness activity parser. Parse the user's natural language description and extract structured activity data with rich context.
+            # First, use exercise knowledge base to enhance understanding
+            exercise_matches = self.exercise_kb.search_exercises(prompt)
+            
+            # Build enhanced context for AI prompt
+            enhanced_context = ""
+            if exercise_matches:
+                top_exercise = exercise_matches[0]
+                enhanced_context = f"""
+Based on exercise knowledge, this appears to be related to:
+- Exercise: {top_exercise['name']} (Strava type: {top_exercise['sport_type']})
+- Keywords: {', '.join(top_exercise.get('keywords', []))}
+- Equipment: {', '.join(top_exercise.get('equipment', []))}
+- Typical locations: {', '.join(top_exercise.get('location_types', []))}
+"""
+
+            system_prompt = f"""You are an expert fitness activity parser enhanced with exercise knowledge. Parse the user's natural language description and extract structured activity data with rich context.
+
+{enhanced_context}
 
 CRITICAL: You MUST return ONLY a valid JSON object. Do not include any explanatory text, markdown formatting, or code blocks. Just pure JSON.
 
 Return this exact JSON structure:
-{
+{{
     "sport_type": "one of: Run, Ride, Swim, Hike, Walk, WeightTraining, Yoga, CrossCountrySkiing, Rowing, Elliptical",
     "duration_minutes": number (required),
     "distance_km": number or null (optional),
     "name": null,
     "description_style": "one of: motivational, casual, technical, humorous",
     "confidence": number between 0-1,
-    "context": {
+    "context": {{
         "location": "string or null",
         "time_of_day": "string or null",
         "weather": "string or null",
@@ -355,15 +416,15 @@ Return this exact JSON structure:
         "nutrition": "string or null",
         "recovery": "string or null",
         "highlights": "string or null"
-    }
-}
+    }}
+}}
 
 Examples:
 "I went for a 30 minute run this morning in the park, felt great!" 
-{"sport_type": "Run", "duration_minutes": 30, "distance_km": null, "name": null, "description_style": "casual", "confidence": 0.9, "context": {"location": "park", "time_of_day": "morning", "feeling": "felt great", "route": "park", "companions": "alone"}}
+{{"sport_type": "Run", "duration_minutes": 30, "distance_km": null, "name": null, "description_style": "casual", "confidence": 0.9, "context": {{"location": "park", "time_of_day": "morning", "feeling": "felt great", "route": "park", "companions": "alone"}}}}
 
 "Did a tough 5k bike ride for 25 minutes, windy but pushed through!" 
-{"sport_type": "Ride", "duration_minutes": 25, "distance_km": 5, "name": null, "description_style": "motivational", "confidence": 0.95, "context": {"intensity": "tough", "weather": "windy", "challenges": "windy conditions", "achievements": "pushed through despite wind"}}
+{{"sport_type": "Ride", "duration_minutes": 25, "distance_km": 5, "name": null, "description_style": "motivational", "confidence": 0.95, "context": {{"intensity": "tough", "weather": "windy", "challenges": "windy conditions", "achievements": "pushed through despite wind"}}}}
 
 Return ONLY the JSON object for this prompt:"""
 
@@ -415,6 +476,19 @@ Return ONLY the JSON object for this prompt:"""
                         parsed_data.setdefault("confidence", 0.5)
                         parsed_data.setdefault("context", {})
                         
+                        # Enhance with exercise knowledge
+                        if exercise_matches:
+                            sport_type = parsed_data.get("sport_type")
+                            enhanced_context = self.exercise_kb.enhance_activity_context(sport_type, parsed_data["context"])
+                            parsed_data["context"] = enhanced_context
+                            
+                            # Add exercise knowledge metadata
+                            parsed_data["exercise_knowledge"] = {
+                                "matched_exercise": exercise_matches[0]["name"],
+                                "confidence_score": exercise_matches[0]["score"],
+                                "suggested_keywords": exercise_matches[0].get("keywords", [])
+                            }
+                        
                         return {
                             "status": "success",
                             "parsed_data": parsed_data,
@@ -439,7 +513,7 @@ Return ONLY the JSON object for this prompt:"""
             return await self._fallback_parse_prompt(prompt)
 
     async def _fallback_parse_prompt(self, prompt: str) -> Dict[str, Any]:
-        """Fallback method to parse prompts when AI fails."""
+        """Fallback method to parse prompts when AI fails, enhanced with exercise knowledge."""
         import re
         
         try:
@@ -462,26 +536,35 @@ Return ONLY the JSON object for this prompt:"""
                 if 'mile' in distance_match.group(0):
                     distance *= 1.609  # Convert miles to km
             
-            # Determine sport type from keywords
+            # Use exercise knowledge base to determine sport type
+            exercise_matches = self.exercise_kb.search_exercises(prompt)
             sport_type = "Run"  # Default
-            if any(word in prompt_lower for word in ['bike', 'cycling', 'cycle', 'rode']):
-                sport_type = "Ride"
-            elif any(word in prompt_lower for word in ['swim', 'swimming', 'pool']):
-                sport_type = "Swim"
-            elif any(word in prompt_lower for word in ['hike', 'hiking', 'trail']):
-                sport_type = "Hike"
-            elif any(word in prompt_lower for word in ['walk', 'walking']):
-                sport_type = "Walk"
-            elif any(word in prompt_lower for word in ['yoga', 'stretching']):
-                sport_type = "Yoga"
-            elif any(word in prompt_lower for word in ['weight', 'lifting', 'gym', 'strength']):
-                sport_type = "WeightTraining"
-            elif any(word in prompt_lower for word in ['rowing', 'row']):
-                sport_type = "Rowing"
-            elif any(word in prompt_lower for word in ['ski', 'skiing']):
-                sport_type = "CrossCountrySkiing"
-            elif any(word in prompt_lower for word in ['elliptical']):
-                sport_type = "Elliptical"
+            
+            if exercise_matches:
+                # Use the best match from exercise knowledge
+                top_match = exercise_matches[0]
+                sport_type = top_match["sport_type"]
+                logger.info(f"Exercise knowledge suggested sport type: {sport_type} for prompt: {prompt}")
+            else:
+                # Fallback to keyword matching
+                if any(word in prompt_lower for word in ['bike', 'cycling', 'cycle', 'rode']):
+                    sport_type = "Ride"
+                elif any(word in prompt_lower for word in ['swim', 'swimming', 'pool']):
+                    sport_type = "Swim"
+                elif any(word in prompt_lower for word in ['hike', 'hiking', 'trail']):
+                    sport_type = "Hike"
+                elif any(word in prompt_lower for word in ['walk', 'walking']):
+                    sport_type = "Walk"
+                elif any(word in prompt_lower for word in ['yoga', 'stretching']):
+                    sport_type = "Yoga"
+                elif any(word in prompt_lower for word in ['weight', 'lifting', 'gym', 'strength']):
+                    sport_type = "WeightTraining"
+                elif any(word in prompt_lower for word in ['rowing', 'row']):
+                    sport_type = "Rowing"
+                elif any(word in prompt_lower for word in ['ski', 'skiing']):
+                    sport_type = "CrossCountrySkiing"
+                elif any(word in prompt_lower for word in ['elliptical']):
+                    sport_type = "Elliptical"
             
             # Extract basic context
             context = {}
@@ -489,22 +572,23 @@ Return ONLY the JSON object for this prompt:"""
                 context['time_of_day'] = 'morning'
             elif any(word in prompt_lower for word in ['evening', 'night', 'pm']):
                 context['time_of_day'] = 'evening'
+            elif any(word in prompt_lower for word in ['afternoon']):
+                context['time_of_day'] = 'afternoon'
             
-            if any(word in prompt_lower for word in ['rain', 'rainy', 'wet']):
-                context['weather'] = 'rainy'
-            elif any(word in prompt_lower for word in ['cold', 'freezing']):
-                context['weather'] = 'cold'
-            elif any(word in prompt_lower for word in ['hot', 'sunny', 'warm']):
-                context['weather'] = 'sunny'
+            if any(word in prompt_lower for word in ['park', 'outdoor', 'outside']):
+                context['location'] = 'outdoor'
+            elif any(word in prompt_lower for word in ['gym', 'indoor']):
+                context['location'] = 'gym'
             
-            if any(word in prompt_lower for word in ['first time', 'first', 'new']):
-                context['achievements'] = 'first time'
+            if any(word in prompt_lower for word in ['felt great', 'amazing', 'awesome', 'fantastic']):
+                context['feeling'] = 'great'
+            elif any(word in prompt_lower for word in ['tough', 'hard', 'difficult', 'challenging']):
+                context['feeling'] = 'challenging'
             
-            if any(word in prompt_lower for word in ['park', 'trail', 'gym', 'pool', 'studio']):
-                for location in ['park', 'trail', 'gym', 'pool', 'studio']:
-                    if location in prompt_lower:
-                        context['location'] = location
-                        break
+            # Enhance context with exercise knowledge if available
+            if exercise_matches:
+                enhanced_context = self.exercise_kb.enhance_activity_context(sport_type, context)
+                context = enhanced_context
             
             parsed_data = {
                 "sport_type": sport_type,
@@ -512,20 +596,29 @@ Return ONLY the JSON object for this prompt:"""
                 "distance_km": distance,
                 "name": None,
                 "description_style": "casual",
-                "confidence": 0.7,
+                "confidence": 0.3,  # Lower confidence for fallback parsing
                 "context": context
             }
             
-            logger.info(f"Fallback parsing successful: {parsed_data}")
+            # Add exercise knowledge metadata if available
+            if exercise_matches:
+                parsed_data["exercise_knowledge"] = {
+                    "matched_exercise": exercise_matches[0]["name"],
+                    "confidence_score": exercise_matches[0]["score"],
+                    "suggested_keywords": exercise_matches[0].get("keywords", []),
+                    "fallback_method": True
+                }
+            
             return {
                 "status": "success",
                 "parsed_data": parsed_data,
-                "original_prompt": prompt
+                "original_prompt": prompt,
+                "method": "fallback_with_exercise_knowledge"
             }
             
         except Exception as e:
-            logger.error(f"Fallback parsing failed: {str(e)}")
-            return {"status": "error", "message": "Could not understand your workout description. Please include the activity type and duration (e.g., 'I went for a 30 minute run')."}
+            logger.error(f"Error in fallback parsing: {str(e)}")
+            return {"status": "error", "message": f"Failed to parse activity: {str(e)}"}
 
     async def create_activity_from_prompt(self, prompt: str) -> Dict[str, Any]:
         """Create a Strava activity from a natural language prompt."""
